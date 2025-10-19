@@ -1,0 +1,237 @@
+"""
+Surprise_flask_app.py
+
+Single-file Flask app để tặng "người thương".
+- Có trang chính hiển thị video (bật/tắt), lời chúc, nút "Mở quà" để hiển thị lời nhắn bí mật.
+- Có hiệu ứng tim + confetti khi mở quà.
+
+Chạy:
+1. Tạo virtualenv (khuyến nghị) và cài Flask:
+   pip install flask
+2. Tạo thư mục static/media và đặt file video của bạn ở:
+   static/media/video.mp4
+   (hoặc đổi đường dẫn trong biến VIDEO_PATH bên dưới)
+3. Chạy:
+   python Surprise_flask_app.py
+4. Mở trình duyệt tới http://127.0.0.1:5000
+
+Lưu ý: file này dùng render_template_string nên chỉ cần 1 file là chạy được.
+"""
+
+from flask import Flask, request, send_file, render_template_string, redirect, url_for
+import os
+from datetime import datetime
+
+app = Flask(__name__)
+
+# Nếu bạn đặt video ở chỗ khác, đổi biến này
+VIDEO_PATH = 'static/media/video.mp4'
+
+# Ensure static/media exists
+os.makedirs(os.path.dirname(VIDEO_PATH), exist_ok=True)
+
+TEMPLATE = """
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Surprise for You ❤️</title>
+  <style>
+    html,body{height:100%;margin:0;font-family:Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial}
+    .bg{background:linear-gradient(135deg,#ffe7f0 0%, #fff6ea 100%);min-height:100%;display:flex;align-items:center;justify-content:center;padding:20px}
+    .card{width:100%;max-width:980px;background:rgba(255,255,255,0.85);backdrop-filter:blur(6px);box-shadow:0 10px 30px rgba(0,0,0,0.08);border-radius:18px;overflow:hidden}
+    .grid{display:grid;grid-template-columns:1fr 420px}
+    @media(max-width:900px){.grid{grid-template-columns:1fr}}
+    .left{padding:24px}
+    h1{margin:0;font-size:28px}
+    p.lead{color:#444;margin-top:8px}
+    .video-wrap{margin-top:16px;border-radius:12px;overflow:hidden;background:#000}
+    video{width:100%;height:100%;display:block}
+    .controls{margin-top:12px;display:flex;gap:8px}
+    button{cursor:pointer;padding:10px 14px;border-radius:10px;border:0;background:#ff6b9a;color:#fff;font-weight:600}
+    .muted{background:#333;color:#fff}
+    .right{background:#fff;padding:22px;border-left:1px solid rgba(0,0,0,0.03)}
+    .gift{display:flex;flex-direction:column;gap:12px;align-items:center;justify-content:center;height:100%}
+    .surprise{padding:14px 18px;border-radius:12px;background:linear-gradient(180deg,#fff3f8,#ffeef5);text-align:center}
+    .heart{font-size:56px;transform:scale(1);transition:transform .3s}
+    .heart.pop{transform:scale(1.25) rotate(-8deg)}
+    .message-box{margin-top:10px;padding:12px;border-radius:10px;background:#fff;border:1px dashed rgba(255,107,154,0.25);min-height:100px}
+    form{width:100%}
+    input[type=text],textarea{width:100%;padding:10px;border-radius:10px;border:1px solid #eaeaea}
+    footer{padding:12px;text-align:center;color:#666;font-size:13px}
+  </style>
+</head>
+<body>
+  <div class="bg">
+    <div class="card">
+      <div class="grid">
+        <div class="left">
+          <h1>Surprise dành cho em ❤️</h1>
+          <p class="lead">Một trang web nhỏ xinh gửi gắm lời chúc và kỷ niệm. Nhấn nút để xem quà nhé.</p>
+
+          <div class="video-wrap">
+            {% if video_exists %}
+            <video id="bgvideo" poster="" loop muted playsinline>
+              <source src="/{{ video_path }}" type="video/mp4">
+              Trình duyệt của bạn không hỗ trợ video.
+            </video>
+            {% else %}
+            <div style="padding:40px;text-align:center;color:#888">Không tìm thấy video. Đặt file video vào <code>{{ video_path }}</code></div>
+            {% endif %}
+          </div>
+
+          <div class="controls">
+            <button id="playBtn">Phát / Tạm dừng</button>
+            <button id="muteBtn" class="muted">Bật âm</button>
+            <button id="openGiftBtn" style="background:#6b8cff">Mở quà</button>
+          </div>
+
+          <div style="margin-top:16px">
+            <form method="POST" action="/save-note">
+              <label>Gửi lời chúc (tối đa 300 ký tự):</label>
+              <textarea name="note" rows="3" maxlength="300" placeholder="Viết lời chúc...">{{ saved_note or '' }}</textarea>
+              <div style="display:flex;gap:8px;margin-top:8px">
+                <button type="submit">Lưu lời chúc</button>
+                <a href="/download" style="display:inline-block;padding:10px 14px;border-radius:10px;background:#27c5a6;color:#fff;text-decoration:none">Tải lời chúc</a>
+              </div>
+            </form>
+          </div>
+
+        </div>
+        <div class="right">
+          <div class="gift">
+            <div class="surprise">
+              <div id="heart" class="heart">❤️</div>
+              <div style="font-weight:700;margin-top:8px">Mở quà để xem điều bất ngờ</div>
+            </div>
+
+            <div class="message-box" id="secretBox">Chưa có lời nhắn... Hãy mở quà để xem.</div>
+
+            <div style="width:100%;text-align:center;margin-top:6px">
+              <small style="color:#999">Ngày tạo: {{ now }}</small>
+            </div>
+          </div>
+        </div>
+      </div>
+      <footer>Thiết kế với ♥ — Dự án nhỏ bằng Python/Flask</footer>
+    </div>
+  </div>
+
+  <script>
+    const video = document.getElementById('bgvideo');
+    const playBtn = document.getElementById('playBtn');
+    const muteBtn = document.getElementById('muteBtn');
+    const openGiftBtn = document.getElementById('openGiftBtn');
+    const heart = document.getElementById('heart');
+    const secretBox = document.getElementById('secretBox');
+
+    if (video){
+      // Autoplay if allowed; many browsers require user gesture to enable sound.
+      video.play().catch(()=>{});
+    }
+
+    playBtn.addEventListener('click', ()=>{
+      if (!video) return;
+      if (video.paused) video.play(); else video.pause();
+    });
+
+    muteBtn.addEventListener('click', ()=>{
+      if (!video) return;
+      video.muted = !video.muted;
+      muteBtn.textContent = video.muted ? 'Bật âm' : 'Tắt âm';
+      muteBtn.classList.toggle('muted', video.muted);
+    });
+
+    openGiftBtn.addEventListener('click', async ()=>{
+      // Animate heart
+      heart.classList.add('pop');
+      setTimeout(()=>heart.classList.remove('pop'), 800);
+
+      // Play confetti using a tiny function
+      runConfetti();
+
+      // Fetch saved note from server
+      try{
+        const res = await fetch('/note');
+        if (res.ok){
+          const j = await res.json();
+          secretBox.textContent = j.note || 'Không có lời nhắn, nhưng tấm lòng vẫn đầy ♥';
+        }
+      }catch(e){
+        secretBox.textContent = 'Lỗi khi lấy lời nhắn.';
+      }
+    });
+
+    // Minimal confetti (no libraries)
+    function runConfetti(){
+      const duration = 1200;
+      const end = Date.now() + duration;
+      (function frame(){
+        const timeLeft = end - Date.now();
+        if (timeLeft <= 0) return;
+        const count = Math.max(5, Math.floor(timeLeft / 40));
+        for (let i=0;i<count;i++){
+          const el = document.createElement('div');
+          el.style.position='fixed';
+          el.style.left=(Math.random()*100)+'%';
+          el.style.top='-10px';
+          el.style.fontSize = (8+Math.random()*18)+'px';
+          el.style.opacity = '0.95';
+          el.textContent = ['🎉','💖','✨'][Math.floor(Math.random()*3)];
+          document.body.appendChild(el);
+          const fall = el.animate([
+            {transform: `translateY(0) rotate(0deg)`, opacity:1},
+            {transform: `translateY(${window.innerHeight + 200}px) rotate(${Math.random()*720-360}deg)`, opacity:0}
+          ],{duration: 1500+Math.random()*800, easing:'cubic-bezier(.2,.8,.2,1)'});
+          fall.onfinish = ()=>el.remove();
+        }
+        requestAnimationFrame(frame);
+      })();
+    }
+  </script>
+</body>
+</html>
+"""
+
+NOTE_FILE = 'saved_note.txt'
+
+@app.route('/', methods=['GET'])
+def index():
+    video_exists = os.path.exists(VIDEO_PATH)
+    saved_note = None
+    if os.path.exists(NOTE_FILE):
+        try:
+            with open(NOTE_FILE, 'r', encoding='utf-8') as f:
+                saved_note = f.read().strip()
+        except:
+            saved_note = None
+    now = datetime.now().strftime('%d %B %Y')
+    # video_path used in template is relative to static folder
+    return render_template_string(TEMPLATE, video_exists=video_exists, video_path=VIDEO_PATH, saved_note=saved_note, now=now)
+
+@app.route('/save-note', methods=['POST'])
+def save_note():
+    note = request.form.get('note','').strip()
+    if len(note) > 1000:
+        note = note[:1000]
+    with open(NOTE_FILE, 'w', encoding='utf-8') as f:
+        f.write(note)
+    return redirect(url_for('index'))
+
+@app.route('/note')
+def get_note():
+    note = ''
+    if os.path.exists(NOTE_FILE):
+        with open(NOTE_FILE, 'r', encoding='utf-8') as f:
+            note = f.read()
+    return {'note': note}
+
+@app.route('/download')
+def download_note():
+    if os.path.exists(NOTE_FILE):
+        return send_file(NOTE_FILE, as_attachment=True, download_name='my_message.txt')
+    return redirect(url_for('index'))
+
+if __name__ == '__main__':
+    app.run(debug=True)
